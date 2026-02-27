@@ -1,81 +1,184 @@
 package logx
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/go-kratos/kratos/v2/log"
+	klog "github.com/go-kratos/kratos/v2/log"
+	"github.com/rs/zerolog"
 )
 
-func TestLogConsole(t *testing.T) {
-
-	logger, closeFn, err := New(Options{
-		BaseFilename: "", // 为空 => 仅控制台 pretty
-		Level:        log.LevelDebug,
+func TestTruncateMsg(t *testing.T) {
+	t.Run("no truncate", func(t *testing.T) {
+		got := truncateMsg("hello", 10)
+		if got != "hello" {
+			t.Fatalf("unexpected value: %s", got)
+		}
 	})
-	if err != nil {
-		panic(err)
-	}
 
-	mlog := log.NewHelper(log.With(logger, "module", "klog"))
-	mlog.Info("console only")
+	t.Run("truncate with suffix", func(t *testing.T) {
+		got := truncateMsg("abcdef", 3)
+		if got != "...(len:6)" {
+			t.Fatalf("unexpected value: %s", got)
+		}
+	})
 
-	mlog.Error(
-		"[stack]\ngitlab.gainetics.io/backend-omp/dnms/probe-executor/pkg/probe_center/data_layer.(*nodeControlRepo).ListNodes\n\t/Users/jeff/tao/workspace/gainetics/probe-executor/pkg/probe_center/data_layer/node_control.go:75\ngitlab.gainetics.io/backend-omp/dnms/probe-executor/app/probe_center/internal/biz.(*NodeControlUseCase).ListNodes\n\t/Users/jeff/tao/workspace/gainetics/probe-executor/app/probe_center/internal/biz/node_control.go:92\ngitlab.gainetics.io/backend-omp/dnms/probe-executor/app/probe_center/internal/service.(*NodeManagerService).NodeList\n\t/Users/jeff/tao/workspace/gainetics/probe-executor/app/probe_center/internal/service/node_manager.go:33\ngitlab.gainetics.io/backend-cdn/go-protos/probe-executor/control-plane/v1._NodeManagerService_NodeList_Handler.func1\n\t/Users/jeff/tao/workspace/gainetics/proto-hub/probe-executor/control-plane/v1/node_manager_grpc.pb.go:161\ngithub.com/go-kratos/kratos/v2/transport/grpc.(*Server).unaryServerInterceptor.func1.1\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/github.com/go-kratos/kratos/v2@v2.8.4/transport/grpc/interceptor.go:37\ngithub.com/go-kratos/kratos/contrib/middleware/validate/v2.ProtoValidate.func1.1\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/github.com/go-kratos/kratos/contrib/middleware/validate/v2@v2.0.0-20250527152916-d6f5f00cf562/validate.go:34\ngithub.com/go-kratos/kratos/v2/middleware/recovery.Recovery.func2.1\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/github.com/go-kratos/kratos/v2@v2.8.4/middleware/recovery/recovery.go:59\ngithub.com/go-kratos/kratos/v2/transport/grpc.(*Server).unaryServerInterceptor.func1\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/github.com/go-kratos/kratos/v2@v2.8.4/transport/grpc/interceptor.go:42\ngitlab.gainetics.io/backend-cdn/go-protos/probe-executor/control-plane/v1._NodeManagerService_NodeList_Handler\n\t/Users/jeff/tao/workspace/gainetics/proto-hub/probe-executor/control-plane/v1/node_manager_grpc.pb.go:163\ngoogle.golang.org/grpc.(*Server).processUnaryRPC\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/google.golang.org/grpc@v1.73.0/server.go:1405\ngoogle.golang.org/grpc.(*Server).handleStream\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/google.golang.org/grpc@v1.73.0/server.go:1815\ngoogle.golang.org/grpc.(*Server).serveStreams.func2.1\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/google.golang.org/grpc@v1.73.0/server.go:1035\nruntime.goexit\n\t/Users/jeff/.asdf/installs/golang/1.24.3/go/src/runtime/asm_arm64.s:122",
-	)
-
-	msg := `{"progress":[{"timing":{"dispatch_ts":"1753447085326"}, "error_message":"地方节点离线"}]}`
-	mlog.Log(
-		log.LevelDebug,
-		"msg", msg,
-		"kind", "server",
-		"component", "grpc",
-		"operation", "/gainetics.probe_executor.control_plane.v1.NodeManagerService/TaskProgress",
-		"code", 0,
-		"reason", "",
-		"stack", "",
-		"latency", 0.000985845,
-		"type", "Request Done",
-	)
-
-	closeFn()
+	t.Run("non-positive limit", func(t *testing.T) {
+		got := truncateMsg("abcdef", 0)
+		if got != "...(len:6)" {
+			t.Fatalf("unexpected value: %s", got)
+		}
+	})
 }
 
-func TestLogFileAndConsole(t *testing.T) {
-	logger, closeFn, err := New(Options{
-		Level:              log.LevelDebug,
-		BaseFilename:       "/tmp/region.log", // 非空 => 写文件(JSON) + 控制台(pretty)
-		MaxSizeBytes:       0,                 // 使用默认 100MB
-		MaxBackups:         0,                 // 使用默认 7
-		Compress:           true,              // 默认 true，可省略
-		ForceDailyRollover: true,              // 默认 true，可省略
-		// Location:         nil,  // 默认本地时区
-		// ConsolePretty:    true, // 默认
-		// TimeFieldFormat:  "2006-01-02 15:04:05", // 默认
-	})
-	if err != nil {
-		panic(err)
+func TestNormalizeOptions(t *testing.T) {
+	opts := Options{}
+	normalizeOptions(&opts)
+
+	if opts.Level != klog.LevelInfo {
+		t.Fatalf("unexpected level: %v", opts.Level)
 	}
-
-	mlog := log.NewHelper(log.With(logger, "module", "klog"))
-	mlog.Info("hello")
-
-	mlog.Error(
-		"[stack]\ngitlab.gainetics.io/backend-omp/dnms/probe-executor/pkg/probe_center/data_layer.(*nodeControlRepo).ListNodes\n\t/Users/jeff/tao/workspace/gainetics/probe-executor/pkg/probe_center/data_layer/node_control.go:75\ngitlab.gainetics.io/backend-omp/dnms/probe-executor/app/probe_center/internal/biz.(*NodeControlUseCase).ListNodes\n\t/Users/jeff/tao/workspace/gainetics/probe-executor/app/probe_center/internal/biz/node_control.go:92\ngitlab.gainetics.io/backend-omp/dnms/probe-executor/app/probe_center/internal/service.(*NodeManagerService).NodeList\n\t/Users/jeff/tao/workspace/gainetics/probe-executor/app/probe_center/internal/service/node_manager.go:33\ngitlab.gainetics.io/backend-cdn/go-protos/probe-executor/control-plane/v1._NodeManagerService_NodeList_Handler.func1\n\t/Users/jeff/tao/workspace/gainetics/proto-hub/probe-executor/control-plane/v1/node_manager_grpc.pb.go:161\ngithub.com/go-kratos/kratos/v2/transport/grpc.(*Server).unaryServerInterceptor.func1.1\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/github.com/go-kratos/kratos/v2@v2.8.4/transport/grpc/interceptor.go:37\ngithub.com/go-kratos/kratos/contrib/middleware/validate/v2.ProtoValidate.func1.1\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/github.com/go-kratos/kratos/contrib/middleware/validate/v2@v2.0.0-20250527152916-d6f5f00cf562/validate.go:34\ngithub.com/go-kratos/kratos/v2/middleware/recovery.Recovery.func2.1\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/github.com/go-kratos/kratos/v2@v2.8.4/middleware/recovery/recovery.go:59\ngithub.com/go-kratos/kratos/v2/transport/grpc.(*Server).unaryServerInterceptor.func1\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/github.com/go-kratos/kratos/v2@v2.8.4/transport/grpc/interceptor.go:42\ngitlab.gainetics.io/backend-cdn/go-protos/probe-executor/control-plane/v1._NodeManagerService_NodeList_Handler\n\t/Users/jeff/tao/workspace/gainetics/proto-hub/probe-executor/control-plane/v1/node_manager_grpc.pb.go:163\ngoogle.golang.org/grpc.(*Server).processUnaryRPC\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/google.golang.org/grpc@v1.73.0/server.go:1405\ngoogle.golang.org/grpc.(*Server).handleStream\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/google.golang.org/grpc@v1.73.0/server.go:1815\ngoogle.golang.org/grpc.(*Server).serveStreams.func2.1\n\t/Users/jeff/.asdf/installs/golang/1.24.3/packages/pkg/mod/google.golang.org/grpc@v1.73.0/server.go:1035\nruntime.goexit\n\t/Users/jeff/.asdf/installs/golang/1.24.3/go/src/runtime/asm_arm64.s:122",
-	)
-
-	msg := `{"progress":[{"timing":{"dispatch_ts":"1753447085326"}, "error_message":"地方节点离线"}]}`
-	mlog.Log(
-		log.LevelDebug,
-		"msg", msg,
-		"kind", "server",
-		"component", "grpc",
-		"operation", "/gainetics.probe_executor.control_plane.v1.NodeManagerService/TaskProgress",
-		"code", 0,
-		"reason", "",
-		"stack", "",
-		"latency", 0.000985845,
-		"type", "Request Done",
-	)
-
-	closeFn()
+	if opts.MaxSizeBytes != 100*1024*1024 {
+		t.Fatalf("unexpected max size: %d", opts.MaxSizeBytes)
+	}
+	if opts.MaxBackups != 7 {
+		t.Fatalf("unexpected max backups: %d", opts.MaxBackups)
+	}
+	if opts.Location == nil {
+		t.Fatal("expected non-nil location")
+	}
+	if !opts.ConsolePretty {
+		t.Fatal("expected ConsolePretty to be true")
+	}
+	if !opts.ForceDailyRollover {
+		t.Fatal("expected ForceDailyRollover to be true")
+	}
+	if !opts.Compress {
+		t.Fatal("expected Compress to be true")
+	}
+	if opts.TimeFieldFormat != "2006-01-02 15:04:05" {
+		t.Fatalf("unexpected time format: %s", opts.TimeFieldFormat)
+	}
 }
+
+func TestBuildConsoleWriterRaw(t *testing.T) {
+	w := buildConsoleWriter(Options{ConsolePretty: false, ConsoleToStderr: false})
+	if w != os.Stdout {
+		t.Fatal("expected stdout writer")
+	}
+	w = buildConsoleWriter(Options{ConsolePretty: false, ConsoleToStderr: true})
+	if w != os.Stderr {
+		t.Fatal("expected stderr writer")
+	}
+}
+
+func TestKratosZeroLogger(t *testing.T) {
+	t.Run("level filter", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		l := &kratosZeroLogger{zl: &zl, level: klog.LevelInfo}
+		if err := l.Log(klog.LevelDebug, "msg", "hidden"); err != nil {
+			t.Fatalf("Log failed: %v", err)
+		}
+		if buf.Len() != 0 {
+			t.Fatalf("expected no log output, got: %s", buf.String())
+		}
+	})
+
+	t.Run("msg and fields", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		l := &kratosZeroLogger{zl: &zl, level: klog.LevelDebug}
+		if err := l.Log(klog.LevelInfo, "msg", "hello", "k", 1); err != nil {
+			t.Fatalf("Log failed: %v", err)
+		}
+		out := buf.String()
+		if !strings.Contains(out, `"msg":"hello"`) {
+			t.Fatalf("missing msg field: %s", out)
+		}
+		if !strings.Contains(out, `"k":1`) {
+			t.Fatalf("missing custom field: %s", out)
+		}
+	})
+
+	t.Run("message alias", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		l := &kratosZeroLogger{zl: &zl, level: klog.LevelDebug}
+		if err := l.Log(klog.LevelInfo, "message", "hello"); err != nil {
+			t.Fatalf("Log failed: %v", err)
+		}
+		if !strings.Contains(buf.String(), `"msg":"hello"`) {
+			t.Fatalf("message alias not mapped: %s", buf.String())
+		}
+	})
+
+	t.Run("odd keyvals", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		l := &kratosZeroLogger{zl: &zl, level: klog.LevelDebug}
+		if err := l.Log(klog.LevelInfo, "k"); err != nil {
+			t.Fatalf("Log failed: %v", err)
+		}
+		if !strings.Contains(buf.String(), `"k":"(MISSING)"`) {
+			t.Fatalf("odd keyvals not handled: %s", buf.String())
+		}
+	})
+
+	t.Run("truncate long message", func(t *testing.T) {
+		var buf bytes.Buffer
+		zl := zerolog.New(&buf)
+		l := &kratosZeroLogger{zl: &zl, level: klog.LevelDebug}
+		long := strings.Repeat("a", maxMsgRunes+10)
+		if err := l.Log(klog.LevelInfo, "msg", long); err != nil {
+			t.Fatalf("Log failed: %v", err)
+		}
+		out := buf.String()
+		if !strings.Contains(out, `...(len:4106)`) {
+			t.Fatalf("expected truncated suffix, got: %s", out)
+		}
+	})
+}
+
+func TestNew(t *testing.T) {
+	t.Run("console only", func(t *testing.T) {
+		logger, closeFn, err := New(Options{BaseFilename: ""})
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+		if logger == nil || closeFn == nil {
+			t.Fatal("expected logger and closeFn")
+		}
+		closeFn()
+	})
+
+	t.Run("file and console", func(t *testing.T) {
+		dir := t.TempDir()
+		base := filepath.Join(dir, "region.log")
+
+		logger, closeFn, err := New(Options{
+			Level:        klog.LevelDebug,
+			BaseFilename: base,
+		})
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+
+		if err := logger.Log(klog.LevelInfo, "msg", "hello"); err != nil {
+			t.Fatalf("log write failed: %v", err)
+		}
+		closeFn()
+
+		files, err := filepath.Glob(base + ".*")
+		if err != nil {
+			t.Fatalf("glob failed: %v", err)
+		}
+		if len(files) == 0 {
+			t.Fatalf("expected rotated base files under %s", dir)
+		}
+	})
+}
+
