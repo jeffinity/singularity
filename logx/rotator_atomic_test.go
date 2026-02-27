@@ -72,4 +72,3 @@ func TestCleanupBackups(t *testing.T) {
 		t.Fatalf("unexpected retained files: %#v", remain)
 	}
 }
-

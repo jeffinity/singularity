@@ -81,4 +81,3 @@ func TestJSONBScan(t *testing.T) {
 		}
 	})
 }
-
